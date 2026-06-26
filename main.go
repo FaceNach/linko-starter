@@ -1,8 +1,12 @@
 package main
 
 import (
+	"bufio"
 	"context"
+	"errors"
 	"flag"
+	"fmt"
+	"io"
 	"log"
 	"os"
 	"os/signal"
@@ -25,28 +29,23 @@ func main() {
 }
 
 func run(ctx context.Context, cancel context.CancelFunc, httpPort int, dataDir string) int {
-	stdLogger := log.New(os.Stderr, "DEBUG:", 0)
-	file, err := os.OpenFile("linko.out.log", os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
-	if err != nil {
-		stdLogger.Printf("failed to open access log: %v\n", err)
-		return 1
-	}
-	defer file.Close()
 
-	accessFile, err := os.OpenFile("linko.access.log", os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
+	logger, cerrar, err := initializeLogger(os.Getenv("LINKO_LOG_FILE"))
 	if err != nil {
-		stdLogger.Printf("failed to open access log: %v\n", err)
+		fmt.Fprintf(os.Stderr, "failed to initialize logger: %v\n", err)
 		return 1
 	}
 
-	accessLogger := log.New(accessFile, "INFO:", 0)
+	if cerrar != nil {
+		defer cerrar()
+	}
 
-	st, err := store.New(dataDir, stdLogger)
+	st, err := store.New(dataDir, logger)
 	if err != nil {
-		stdLogger.Printf("failed to create store: %v\n", err)
+		logger.Printf("failed to create store: %v\n", err)
 		return 1
 	}
-	s := newServer(*st, httpPort, cancel, accessLogger)
+	s := newServer(*st, httpPort, cancel, logger)
 	var serverErr error
 	go func() {
 		serverErr = s.start()
@@ -56,15 +55,44 @@ func run(ctx context.Context, cancel context.CancelFunc, httpPort int, dataDir s
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
-	log.Println("Linko is shutting down")
+	logger.Println("Linko is shutting down")
 	if err := s.shutdown(shutdownCtx); err != nil {
-		stdLogger.Printf("failed to shutdown server: %v\n", err)
+		logger.Printf("failed to shutdown server: %v\n", err)
 		return 1
 	}
 	if serverErr != nil {
-		stdLogger.Printf("erver error: %v\n", serverErr)
+		logger.Printf("Server error: %v\n", serverErr)
 		return 1
 	}
-
 	return 0
+}
+
+type closeFunc func() error
+
+func initializeLogger(logFile string) (*log.Logger, closeFunc, error) {
+
+	if len(logFile) == 0 {
+		logger := log.New(os.Stderr, "", 0)
+		return logger, nil, nil
+	}
+
+	file, err := os.OpenFile(logFile, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0700)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	bufferedFile := bufio.NewWriterSize(file, 8192)
+
+	var cerrar closeFunc = func() error {
+		errFlush := bufferedFile.Flush()
+		errClose := file.Close()
+
+		return errors.Join(errFlush, errClose)
+	}
+
+	multiWriter := io.MultiWriter(os.Stderr, bufferedFile)
+
+	logger := log.New(multiWriter, "", 0)
+
+	return logger, cerrar, nil
 }
