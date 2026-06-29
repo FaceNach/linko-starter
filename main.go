@@ -7,7 +7,7 @@ import (
 	"flag"
 	"fmt"
 	"io"
-	"log"
+	"log/slog"
 	"os"
 	"os/signal"
 	"syscall"
@@ -36,13 +36,15 @@ func run(ctx context.Context, cancel context.CancelFunc, httpPort int, dataDir s
 		return 1
 	}
 
-	if cerrar != nil {
-		defer cerrar()
-	}
+	defer func() {
+		if err := cerrar(); err != nil {
+			fmt.Fprintf(os.Stderr, "failed to clean up logger resources: %v\n", err)
+		}
+	}()
 
 	st, err := store.New(dataDir, logger)
 	if err != nil {
-		logger.Printf("failed to create store: %v\n", err)
+		logger.Debug(fmt.Sprintf("failed to create store: %v\n", err))
 		return 1
 	}
 	s := newServer(*st, httpPort, cancel, logger)
@@ -55,13 +57,13 @@ func run(ctx context.Context, cancel context.CancelFunc, httpPort int, dataDir s
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
-	logger.Println("Linko is shutting down")
+	logger.Debug("Linko is shutting down")
 	if err := s.shutdown(shutdownCtx); err != nil {
-		logger.Printf("failed to shutdown server: %v\n", err)
+		logger.Debug(fmt.Sprintf("failed to shutdown server: %v\n", err))
 		return 1
 	}
 	if serverErr != nil {
-		logger.Printf("Server error: %v\n", serverErr)
+		logger.Debug(fmt.Sprintf("Server error: %v\n", serverErr))
 		return 1
 	}
 	return 0
@@ -69,16 +71,16 @@ func run(ctx context.Context, cancel context.CancelFunc, httpPort int, dataDir s
 
 type closeFunc func() error
 
-func initializeLogger(logFile string) (*log.Logger, closeFunc, error) {
+func initializeLogger(logFile string) (*slog.Logger, closeFunc, error) {
 
 	if len(logFile) == 0 {
-		logger := log.New(os.Stderr, "", 0)
+		logger := slog.New(slog.NewTextHandler(os.Stderr, nil))
 		return logger, nil, nil
 	}
 
 	file, err := os.OpenFile(logFile, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0700)
 	if err != nil {
-		return nil, nil, err
+		return nil, func() error { return nil }, err
 	}
 
 	bufferedFile := bufio.NewWriterSize(file, 8192)
@@ -92,7 +94,16 @@ func initializeLogger(logFile string) (*log.Logger, closeFunc, error) {
 
 	multiWriter := io.MultiWriter(os.Stderr, bufferedFile)
 
-	logger := log.New(multiWriter, "", 0)
+	debugHandler := slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{
+		Level: slog.LevelDebug,
+	})
+
+	infoHandler := slog.NewTextHandler(multiWriter, &slog.HandlerOptions{
+		Level: slog.LevelInfo})
+
+	multiHandler := slog.NewMultiHandler(debugHandler, infoHandler)
+
+	logger := slog.New(multiHandler)
 
 	return logger, cerrar, nil
 }
