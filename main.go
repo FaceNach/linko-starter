@@ -74,7 +74,7 @@ type closeFunc func() error
 func initializeLogger(logFile string) (*slog.Logger, closeFunc, error) {
 
 	if len(logFile) == 0 {
-		logger := slog.New(slog.NewTextHandler(os.Stderr, nil))
+		logger := slog.New(slog.NewJSONHandler(os.Stderr, nil))
 		return logger, nil, nil
 	}
 
@@ -94,11 +94,11 @@ func initializeLogger(logFile string) (*slog.Logger, closeFunc, error) {
 
 	multiWriter := io.MultiWriter(os.Stderr, bufferedFile)
 
-	debugHandler := slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{
+	debugHandler := slog.NewJSONHandler(os.Stderr, &slog.HandlerOptions{
 		Level: slog.LevelDebug,
 	})
 
-	infoHandler := slog.NewTextHandler(multiWriter, &slog.HandlerOptions{
+	infoHandler := slog.NewJSONHandler(multiWriter, &slog.HandlerOptions{
 		Level: slog.LevelInfo})
 
 	multiHandler := slog.NewMultiHandler(debugHandler, infoHandler)
