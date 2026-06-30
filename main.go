@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"boot.dev/linko/internal/store"
+	pkgerr "github.com/pkg/errors"
 )
 
 func main() {
@@ -74,7 +75,9 @@ type closeFunc func() error
 func initializeLogger(logFile string) (*slog.Logger, closeFunc, error) {
 
 	if len(logFile) == 0 {
-		logger := slog.New(slog.NewJSONHandler(os.Stderr, nil))
+		logger := slog.New(slog.NewJSONHandler(os.Stderr, &slog.HandlerOptions{
+			ReplaceAttr: replaceAttr,
+		}))
 		return logger, nil, nil
 	}
 
@@ -99,11 +102,35 @@ func initializeLogger(logFile string) (*slog.Logger, closeFunc, error) {
 	})
 
 	infoHandler := slog.NewJSONHandler(multiWriter, &slog.HandlerOptions{
-		Level: slog.LevelInfo})
+		Level:       slog.LevelInfo,
+		ReplaceAttr: replaceAttr})
 
 	multiHandler := slog.NewMultiHandler(debugHandler, infoHandler)
 
 	logger := slog.New(multiHandler)
 
 	return logger, cerrar, nil
+}
+
+type stackTracer interface {
+	error
+	StackTrace() pkgerr.StackTrace
+}
+
+func replaceAttr(groups []string, a slog.Attr) slog.Attr {
+	if a.Key == "error" {
+		err, ok := a.Value.Any().(error)
+		if !ok {
+			return a
+		}
+		if stackErr, ok := errors.AsType[stackTracer](err); ok {
+			return slog.GroupAttrs(
+				"error",
+				slog.Attr{Key: "message", Value: slog.StringValue(stackErr.Error())},
+				slog.Attr{Key: "stack_trace", Value: slog.StringValue(fmt.Sprintf("%+v", stackErr.StackTrace()))},
+			)
+		}
+		return a
+	}
+	return a
 }
