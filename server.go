@@ -4,10 +4,12 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	"net"
 	"net/http"
 	"os"
+	"time"
 
 	"boot.dev/linko/internal/store"
 )
@@ -70,11 +72,75 @@ func (s *server) handlerShutdown(w http.ResponseWriter, r *http.Request) {
 	go s.cancel()
 }
 
+type LogContext struct {
+	Username string
+}
+
+const logContextKey contextKey = "log_context"
+
 func requestLogger(logger *slog.Logger) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			next.ServeHTTP(w, r)
-			logger.Info("Served request", slog.String("method", r.Method), slog.String("path", r.URL.Path), slog.String("client_ip", r.RemoteAddr))
+			now := time.Now()
+
+			logContex := &LogContext{}
+			ctx := context.WithValue(r.Context(), logContextKey, logContex)
+			r = r.WithContext(ctx)
+
+			spyReader := &spyReadCloser{ReadCloser: r.Body}
+			r.Body = spyReader
+
+			spyResponseWriter := &spyResponseWriter{ResponseWriter: w}
+
+			next.ServeHTTP(spyResponseWriter, r)
+
+			attrs := []any{
+				slog.String("method", r.Method),
+				slog.String("path", r.URL.Path),
+				slog.String("client_ip", r.RemoteAddr),
+				slog.Duration("duration", time.Since(now)),
+				slog.Int("request_body_bytes", spyReader.bytesRead),
+				slog.Int("response_status", spyResponseWriter.statusCode),
+				slog.Int("response_body_bytes", spyResponseWriter.bytesWritten),
+			}
+
+			if logContex.Username != "" {
+				attrs = append(attrs, slog.String("user", logContex.Username))
+			}
+
+			logger.Info("Served request", attrs...)
+
 		})
 	}
+}
+
+type spyReadCloser struct {
+	io.ReadCloser
+	bytesRead int
+}
+
+func (r *spyReadCloser) Read(p []byte) (int, error) {
+	n, err := r.ReadCloser.Read(p)
+	r.bytesRead += n
+	return n, err
+}
+
+type spyResponseWriter struct {
+	http.ResponseWriter
+	bytesWritten int
+	statusCode   int
+}
+
+func (w *spyResponseWriter) Write(p []byte) (int, error) {
+	if w.statusCode == 0 {
+		w.statusCode = http.StatusOK
+	}
+	n, err := w.ResponseWriter.Write(p)
+	w.bytesWritten += n
+	return n, err
+}
+
+func (w *spyResponseWriter) WriteHeader(statusCode int) {
+	w.statusCode = statusCode
+	w.ResponseWriter.WriteHeader(statusCode)
 }
