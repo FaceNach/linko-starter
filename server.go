@@ -26,7 +26,7 @@ func newServer(store store.Store, port int, cancel context.CancelFunc, logger *s
 
 	srv := &http.Server{
 		Addr:    fmt.Sprintf(":%d", port),
-		Handler: requestLogger(logger)(mux),
+		Handler: newIDRequestMiddleware(requestLogger(logger)(mux)),
 	}
 
 	s := &server{
@@ -74,6 +74,7 @@ func (s *server) handlerShutdown(w http.ResponseWriter, r *http.Request) {
 
 type LogContext struct {
 	Username string
+	Error    error
 }
 
 const logContextKey contextKey = "log_context"
@@ -92,6 +93,8 @@ func requestLogger(logger *slog.Logger) func(http.Handler) http.Handler {
 
 			spyResponseWriter := &spyResponseWriter{ResponseWriter: w}
 
+			id := w.Header().Get("X-Request-ID")
+
 			next.ServeHTTP(spyResponseWriter, r)
 
 			attrs := []any{
@@ -106,6 +109,14 @@ func requestLogger(logger *slog.Logger) func(http.Handler) http.Handler {
 
 			if logContex.Username != "" {
 				attrs = append(attrs, slog.String("user", logContex.Username))
+			}
+
+			if logContex.Error != nil {
+				attrs = append(attrs, slog.Any("error", logContex.Error))
+			}
+
+			if id != "" {
+				attrs = append(attrs, slog.String("request_id", id))
 			}
 
 			logger.Info("Served request", attrs...)
@@ -143,4 +154,11 @@ func (w *spyResponseWriter) Write(p []byte) (int, error) {
 func (w *spyResponseWriter) WriteHeader(statusCode int) {
 	w.statusCode = statusCode
 	w.ResponseWriter.WriteHeader(statusCode)
+}
+
+func httpError(ctx context.Context, w http.ResponseWriter, status int, err error) {
+	if logCtx, ok := ctx.Value(logContextKey).(*LogContext); ok {
+		logCtx.Error = err
+	}
+	http.Error(w, err.Error(), status)
 }
