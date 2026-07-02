@@ -8,7 +8,7 @@ import (
 
 func newIDRequestMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-
+		
 		id := r.Header.Get("X-Request-ID")
 		if strings.TrimSpace(id) == "" {
 			randId := rand.Text()
