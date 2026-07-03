@@ -1,7 +1,6 @@
 package main
 
 import (
-	"bufio"
 	"context"
 	"errors"
 	"flag"
@@ -19,6 +18,7 @@ import (
 	"github.com/lmittmann/tint"
 	"github.com/mattn/go-isatty"
 	pkgerr "github.com/pkg/errors"
+	"gopkg.in/natefinch/lumberjack.v2"
 )
 
 func main() {
@@ -52,6 +52,9 @@ func run(ctx context.Context, cancel context.CancelFunc, httpPort int, dataDir s
 	)
 
 	defer func() {
+		if cerrar == nil {
+			return
+		}
 		if err := cerrar(); err != nil {
 			fmt.Fprintf(os.Stderr, "failed to clean up logger resources: %v\n", err)
 		}
@@ -100,30 +103,28 @@ func initializeLogger(logFile string) (*slog.Logger, closeFunc, error) {
 		return logger, nil, nil
 	}
 
-	file, err := os.OpenFile(logFile, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0700)
-	if err != nil {
-		return nil, func() error { return nil }, err
+	fileLogger := &lumberjack.Logger{
+		Filename:   logFile,
+		MaxSize:    1,
+		MaxAge:     28,
+		MaxBackups: 10,
+		LocalTime:  false,
+		Compress:   true,
 	}
-
-	bufferedFile := bufio.NewWriterSize(file, 8192)
 
 	var cerrar closeFunc = func() error {
-		errFlush := bufferedFile.Flush()
-		errClose := file.Close()
-
-		return errors.Join(errFlush, errClose)
+		return fileLogger.Close()
 	}
 
-	multiWriter := io.MultiWriter(os.Stderr, bufferedFile)
+	multiWriter := io.MultiWriter(os.Stderr, fileLogger)
 
 	debugHandler := slog.NewJSONHandler(os.Stderr, &slog.HandlerOptions{
 		Level: slog.LevelDebug,
 	})
 
-	infoHandler := tint.NewHandler(multiWriter, &tint.Options{
+	infoHandler := slog.NewJSONHandler(multiWriter, &slog.HandlerOptions{
 		Level:       slog.LevelInfo,
-		ReplaceAttr: replaceAttr,
-		NoColor:     noColor})
+		ReplaceAttr: replaceAttr})
 
 	multiHandler := slog.NewMultiHandler(debugHandler, infoHandler)
 
