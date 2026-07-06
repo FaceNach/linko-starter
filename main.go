@@ -7,8 +7,10 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"net/url"
 	"os"
 	"os/signal"
+	"slices"
 	"syscall"
 	"time"
 
@@ -20,6 +22,8 @@ import (
 	pkgerr "github.com/pkg/errors"
 	"gopkg.in/natefinch/lumberjack.v2"
 )
+
+var sensitiveKeys = []string{"password", "key", "apikey", "secret", "pin", "creditcardno", "user"}
 
 func main() {
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
@@ -144,6 +148,20 @@ type multiError interface {
 }
 
 func replaceAttr(groups []string, a slog.Attr) slog.Attr {
+
+	if slices.Contains(sensitiveKeys, a.Key) {
+		return slog.String(a.Key, "[REDACTED]")
+	}
+
+	if a.Value.Kind() == slog.KindString {
+		if u, err := url.Parse(a.Value.String()); err == nil && u.User != nil {
+			if _, hasPassword := u.User.Password(); hasPassword {
+				u.User = url.UserPassword(u.User.Username(), "[REDACTED]")
+				return slog.String(a.Key, u.String())
+			}
+		}
+	}
+
 	if a.Key == "error" {
 		err, ok := a.Value.Any().(error)
 		if !ok {
