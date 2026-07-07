@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"net/http"
+	"os"
 
 	pkgerr "github.com/pkg/errors"
 	"golang.org/x/crypto/bcrypt"
@@ -23,6 +24,12 @@ var allowedUsers = map[string]string{
 
 func (s *server) authMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+
+		if os.Getenv("ENVIRONMENT") == "development" {
+			httpError(r.Context(), w, http.StatusUnauthorized, fmt.Errorf("unauthorized"))
+			return
+		}
+
 		username, password, ok := r.BasicAuth()
 		if !ok {
 			httpError(r.Context(), w, http.StatusUnauthorized, fmt.Errorf("unauthorized"))
