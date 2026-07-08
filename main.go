@@ -45,6 +45,23 @@ func run(ctx context.Context, cancel context.CancelFunc, httpPort int, dataDir s
 		return 1
 	}
 
+	shutDown, err := initTracing(ctx)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "failed to initialize tracing: %v\n", err)
+		return 1
+	}
+
+	defer func() {
+		if shutDown == nil {
+			return
+		}
+
+		if err := shutDown(context.Background()); err != nil {
+			fmt.Fprintf(os.Stderr, "failed to clean up tracing resources: %v\n", err)
+		}
+
+	}()
+
 	env := os.Getenv("ENV")
 	hostname, _ := os.Hostname()
 
